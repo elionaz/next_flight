@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vuelo más cercano</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f0f0f0;
+            color: #333;
+            margin: 0;
+            padding: 20px;
+        }
+        h1, h2 {
+            color: #333;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        th, td {
+            padding: 10px;
+            border: 1px solid #ccc;
+        }
+        th {
+            background-color: #333;
+            color: #fff;
+        }
+        td {
+            background-color: #fff;
+        }
+        #flightDetails {
+            background-color: #fff;
+            padding: 20px;
+            margin-bottom: 20px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+        }
+        #flightDetails img {
+            max-width: 100px;
+            margin-left: 20px;
+        }
+        #flightDetails div {
+            max-width: calc(100% - 120px);
+        }
+        #flightDetails p {
+            margin: 5px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>Vuelo más cercano</h1>
+    <div id="flightDetails"></div>
+    <h2>Lista de Vuelos Cercanos</h2>
+    <table border="1">
+        <thead>
+            <tr>
+                <th>Aerolínea</th>
+                <th>Vuelo</th>
+                <th>Origen</th>
+                <th>Altitud (m)</th>
+                <th>Distancia (km)</th>
+            </tr>
+        </thead>
+        <tbody id="flightsTable">
+        </tbody>
+    </table>
+
+    <script>
+        const RADIUS = 1.00; // Radio en grados (~1.1 km)
+        let airlines = {};
+
+        async function loadAirlines() {
+            try {
+                const response = await fetch('airlines.json');
+                airlines = await response.json();
+            } catch (error) {
+                console.error("Error al cargar el archivo de aerolíneas:", error);
+            }
+        }
+
+        // Función para calcular la distancia entre dos puntos usando la fórmula de Haversine
+        function haversine(lat1, lon1, lat2, lon2) {
+            const toRad = (value) => value * Math.PI / 180;
+            const R = 6371; // Radio de la Tierra en km
+            const dLat = toRad(lat2 - lat1);
+            const dLon = toRad(lon2 - lon1);
+            const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+                      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            const d = R * c;
+            return d;
+        }
+
+        async function getFlights(latitude, longitude) {
+            const lamin = latitude - RADIUS;
+            const lomin = longitude - RADIUS;
+            const lamax = latitude + RADIUS;
+            const lomax = longitude + RADIUS;
+            const url = `https://opensky-network.org/api/states/all?lamin=${lamin}&lomin=${lomin}&lamax=${lamax}&lomax=${lomax}`;
+            
+            try {
+                const response = await fetch(url);
+                const data = await response.json();
+                return data.states;
+            } catch (error) {
+                console.error("Error al obtener los datos de la API:", error);
+                return [];
+            }
+        }
+
+        async function getFlightDetails(icao24) {
+            const url = `https://opensky-network.org/api/states/all?icao24=${icao24}`;
+            try {
+                const response = await fetch(url);
+                const data = await response.json();
+                return data.states[0];
+            } catch (error) {
+                console.error("Error al obtener los detalles del vuelo:", error);
+                return null;
+            }
+        }
+
+        async function displayFlights(latitude, longitude) {
+            const flights = await getFlights(latitude, longitude);
+            const flightData = flights.map(flight => {
+                const [icao24, callsign, origin_country, , , lon, lat, altitude] = flight;
+                const distance = haversine(latitude, longitude, lat, lon);
+                return { icao24, callsign, origin_country, altitude, lat, lon, distance };
+            });
+
+            flightData.sort((a, b) => a.distance - b.distance);
+
+            const topFlights = flightData.slice(0, 5);
+
+            const tableBody = document.getElementById("flightsTable");
+            tableBody.innerHTML = ''; // Clear previous content
+            topFlights.forEach(flight => {
+                const row = document.createElement("tr");
+                const airlineCode = flight.callsign.trim().substring(0, 3);
+                const airline = airlines[airlineCode] || "N/A";
+                row.innerHTML = `
+                    <td class="airline-cell" data-code="${airlineCode}">${airline}</td>
+                    <td>${flight.callsign}</td>
+                    <td>${flight.origin_country}</td>
+                    <td>${flight.altitude ? flight.altitude.toFixed(2) : "N/A"}</td>
+                    <td>${flight.distance.toFixed(2)}</td>
+                `;
+                tableBody.appendChild(row);
+            });
+
+            // Reemplaza "N/A" con los valores correctos del JSON
+            document.querySelectorAll('.airline-cell').forEach(cell => {
+                if (cell.innerText === "N/A") {
+                    const code = cell.getAttribute('data-code');
+                    cell.innerText = airlines[code] || "N/A";
+                }
+            });
+
+            if (topFlights.length > 0) {
+                const closestFlight = topFlights[0];
+                const flightDetails = await getFlightDetails(closestFlight.icao24);
+                displayFlightDetails(flightDetails, closestFlight.callsign.trim().substring(0, 3));
+            }
+        }
+
+        function displayFlightDetails(flight, airlineCode) {
+            if (!flight) {
+                document.getElementById("flightDetails").innerText = "No se encontraron detalles del vuelo.";
+                return;
+            }
+
+            const [icao24, callsign, origin_country, time_position, last_contact, lon, lat, baro_altitude, , velocity, true_track, vertical_rate, , geo_altitude] = flight;
+            const logoUrl = `https://www.flightaware.com/images/airline_logos/180px/${airlineCode}.png`;
+            const velocityKmh = velocity * 3.6;
+
+            const detailsHTML = `
+                <div>
+                    <p><strong>Vuelo:</strong> ${callsign}</p>
+                    <p><strong>País de Origen:</strong> ${origin_country}</p>
+                    <p><strong>Última Posición:</strong> ${new Date(time_position * 1000).toLocaleString()}</p>
+                    <p><strong>Último Contacto:</strong> ${new Date(last_contact * 1000).toLocaleString()}</p>
+                    <p><strong>Latitud:</strong> ${lat}</p>
+                    <p><strong>Longitud:</strong> ${lon}</p>
+                    <p><strong>Altitud Barométrica (m):</strong> ${baro_altitude}</p>
+                    <p><strong>Velocidad (km/h):</strong> ${velocityKmh.toFixed(2)}</p>
+                    <p><strong>Rumbo (°):</strong> ${true_track}</p>
+                    <p><strong>Velocidad Vertical (m/s):</strong> ${vertical_rate}</p>
+                    <p><strong>Altitud Geométrica (m):</strong> ${geo_altitude}</p>
+                </div>
+                <img src="${logoUrl}" alt="${airlines[airlineCode] || 'Aerolínea'}">
+            `;
+
+            document.getElementById("flightDetails").innerHTML = detailsHTML;
+        }
+
+        async function init() {
+            await loadAirlines();
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(async position => {
+                    const latitude = position.coords.latitude;
+                    const longitude = position.coords.longitude;
+                    displayFlights(latitude, longitude);
+                    setInterval(() => displayFlights(latitude, longitude), 60000); // Refresh every minute
+                }, error => {
+                    console.error("Error al obtener la geolocalización:", error);
+                });
+            } else {
+                console.error("Geolocalización no soportada por el navegador.");
+            }
+        }
+
+        init();
+    </script>
+</body>
+</html>
+
